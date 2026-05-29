@@ -3,7 +3,7 @@ from model import GeminiAnalyzer
 from config import SCREEN_CONFIG
 import time
 import os
-from interact import text_to_speech, play_audio 
+from interact import text_to_speech
 
 def main():
     analyzer = GeminiAnalyzer()

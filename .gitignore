@@ -1,0 +1,16 @@
+# Archivos 
+.env
+
+# Carpetas
+.venv/
+src/__pycache__/
+assets/overpositioned_icon/
+deprecated/
+scripts/
+
+# Otros
+*.log
+*.tmp
+*.pyc
+*.pyo
+*.pyd
