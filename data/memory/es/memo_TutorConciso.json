@@ -1,0 +1,9 @@
+{
+  "context": "",
+  "user_status": "",
+  "current_objective": "",
+  "recent_events": [
+    "The screenshot shows a Visual Studio Code window.\n\n-   **Explorer pane:** Displays a project named \"PROYECTO IA\" with subfolders and files. A file named `ConciseTutor.yaml` is open.\n-   **Editor pane:** Shows the content of `ConciseTutor.yaml`, defining \"Speech Style\", \"Behavior\", \"Response Examples\", and \"Technical Notes\" for a tutor.\n-   **Chat pane:** Displays a message \"OSERROR"
+  ],
+  "previous_comments": []
+}

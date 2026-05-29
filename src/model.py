@@ -1,10 +1,12 @@
+import profile
+
 import requests
 import base64
 import json
 import time
 from collections import deque
-from config import GEMINI_CONFIG, SCREEN_CONFIG
-from memory import GameMemory
+from config import GEMINI_CONFIG, SCREEN_CONFIG, get_character, DEFAULT_CHARACTER
+from memory import Memory
 
 class GeminiAnalyzer:
     def __init__(self):
@@ -15,17 +17,19 @@ class GeminiAnalyzer:
         self.request_queue = deque()
         self.last_request_time = 0
         self.min_interval = 1.2
-        self.context = GameMemory()
+        self.context = Memory()
 
-    def analyze_screen(self, image_path):
-        # Control de tasa
+    def _wait_rate_limit(self):
+        """Evita consultas demasiado seguidas a la API."""
         now = time.time()
         elapsed = now - self.last_request_time
-        
         if elapsed < self.min_interval:
             time.sleep(self.min_interval - elapsed)
-        
         self.last_request_time = time.time()
+
+    def analyze_screen(self, image_path, character_key=None):
+        # Control de tasa
+        self._wait_rate_limit()
         
         """Envía la imagen a la API de Gemini y obtiene un comentario"""
         try:
@@ -33,33 +37,55 @@ class GeminiAnalyzer:
             with open(image_path, "rb") as img_file:
                 base64_image = base64.b64encode(img_file.read()).decode("utf-8")
             
-            # Construir contexto
-            context_history = "\n".join([h for h in self.history if isinstance(h, str)][-SCREEN_CONFIG["max_history"]:])
+            # Construir contexto estable...
+            activity_context = self.context.context
+
+            # Resolve character profile
+            if character_key is None:
+                character_key = DEFAULT_CHARACTER
+            self.context.set_character(character_key)
+            activity_context = self.context.context
+            profile = get_character(character_key)
             
-            game_context = self.context.context
-            
+            if not profile or not profile.get("enabled", True):
+                character_key = DEFAULT_CHARACTER
+                profile = get_character(DEFAULT_CHARACTER)
+
+            """
+            # Debug: mostrar qué perfil se está usando
+            try:
+                vid = profile.get("voice_id", "")
+                prompt_len = len(profile.get("prompt", "") or "")
+            except Exception:
+                vid = ""
+                prompt_len = 0
+             print(f"[DEBUG] analyze_screen using character={character_key} name={profile.get('display_name')} voice_id={vid or 'None'} prompt_len={prompt_len} language={profile.get('language', 'undefined')}")
+            """    
+
+            # Construir prompt con el perfil del personaje
+            base_prompt = profile.get("prompt", "")
+            voice_id = profile.get("voice_id", "")
             prompt = f"""
-            Eres {GEMINI_CONFIG['character']['name']}, observando a alguien jugar {game_context['game']}.
-            Estilo: sarcástico, condescendiente, con humor oscuro.
-            
-            Contexto actual:
-            - Misión: {game_context.get('current_mission', 'Desconocida')}
-            - Estado del jugador: {game_context.get('player_status', 'Normal')}
-            - Enemigos recientes: {', '.join(game_context.get('enemies_encountered', [])[-3:]) or 'Ninguno'}
-            
-            Eventos recientes:
-            {chr(10).join(game_context.get('recent_events', [])[-2:]) or 'Ninguno'}
-            
-            Historial reciente:
-            {context_history or 'Ninguno'}
-            
-            Instrucciones:
-            1. Analiza la imagen y describe lo que está ocurriendo
-            2. Relaciona con eventos recientes y contexto del juego
-            3. Haz un comentario sarcástico entre 15-20 palabras
-            4. Usa formato: '[{GEMINI_CONFIG['character']['name']}]: <comentario>'
-            
-            Analiza esta imagen:
+            {base_prompt}
+
+            Describe exactly what is visible in the current screenshot.
+
+            Context:
+            - Game or app: {activity_context.get('context', 'Unknown')}
+            - Objective: {activity_context.get('current_objective', 'Unknown')}
+            - User state: {activity_context.get('user_status', 'Normal')}
+            - Recent events: {', '.join(activity_context.get('recent_events', [])[-3:]) or 'None'}
+            - Recent comments: {', '.join(activity_context.get('previous_comments', [])[-3:]) or 'None'}
+
+            Instructions:
+            1. Focus only on the current image. Consider the context of previous if there's nothing new to comment. For example, comparing the state of previous images with the recent one.
+            2. Do not reuse previous replies or mention prior screenshots unless they are visible now.
+            3. If the screenshot shows an application window, describe the application window.
+            4. Only say the screen is black or empty if the current image is actually black or empty.
+            5. If the image is unclear or repetitive, make opinions about it, and suggest to the user to do something else related with what the context is, and/or what the image shows.
+            6. Respond in the respective language of the character profile, prioritizing clarity and usefulness. If the profile doesn't specify a language, respond in English.
+
+            Analyze this image:
             """
             
             payload = {
@@ -75,7 +101,7 @@ class GeminiAnalyzer:
                     ]
                 }],
                 "generationConfig": {
-                    "maxOutputTokens": 150,
+                    "maxOutputTokens": 100,
                     "temperature": 0.7
                 }
             }
@@ -87,18 +113,91 @@ class GeminiAnalyzer:
             comment = self.process_response(response)
             
             self.context.update_memory(comment)
+            self.history.append(comment)
+            if len(self.history) > SCREEN_CONFIG["max_history"]:
+                self.history.pop(0)
             
             # Procesar respuesta
             return comment
             
         except Exception as e:
             self.error_count += 1
-            error_msg = f"[GLaDOS]: Error técnico ({self.error_count}). Intento fallido."
+            error_msg = f"Error técnico ({self.error_count}). Intento fallido."
             print(f"Error en analyze_screen: {str(e)}")
             return error_msg
 
+    def set_character(self, character_key):
+        self.context.set_character(character_key)
+
+    def analyze_text(self, user_text, character_key=None):
+        """Envía texto directo a Gemini (sin captura de pantalla)."""
+        self._wait_rate_limit()
+
+        try:
+            if character_key is None:
+                character_key = DEFAULT_CHARACTER
+
+            self.context.set_character(character_key)
+            activity_context = self.context.context
+            profile = get_character(character_key)
+
+            if not profile or not profile.get("enabled", True):
+                character_key = DEFAULT_CHARACTER
+                profile = get_character(DEFAULT_CHARACTER)
+
+            base_prompt = profile.get("prompt", "")
+
+            prompt = f"""
+            {base_prompt}
+
+            The user is sending a direct message. Respond as the selected character.
+
+            Context:
+            - Game or app: {activity_context.get('context', 'Unknown')}
+            - Objective: {activity_context.get('current_objective', 'Unknown')}
+            - User state: {activity_context.get('user_status', 'Normal')}
+            - Recent events: {', '.join(activity_context.get('recent_events', [])[-3:]) or 'None'}
+            - Recent comments: {', '.join(activity_context.get('previous_comments', [])[-3:]) or 'None'}
+
+            User message:
+            {user_text}
+
+            Instructions:
+            1. Respond in the respective language of the character profile, prioritizing clarity and usefulness. If the profile doesn't specify a language, respond in English.
+            2. Keep the response useful and in-character.
+            3. If the message asks for action, propose clear next steps.
+            """
+
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"text": prompt}
+                    ]
+                }],
+                "generationConfig": {
+                    "maxOutputTokens": 230,
+                    "temperature": 0.7
+                }
+            }
+
+            response = self.make_api_call(payload)
+            comment = self.process_response(response)
+
+            self.context.update_memory(comment)
+            self.history.append(comment)
+            if len(self.history) > SCREEN_CONFIG["max_history"]:
+                self.history.pop(0)
+
+            return comment
+
+        except Exception as e:
+            self.error_count += 1
+            error_msg = f"Error técnico ({self.error_count}). Intento fallido."
+            print(f"Error en analyze_text: {str(e)}")
+            return error_msg
+
     def make_api_call(self, payload, max_retries=3):
-        """Realiza la llamada a la API con reintentos"""
+        """Realiza la llamada a la API con reintentos..."""
         for attempt in range(max_retries):
             try:
                 response = requests.post(
@@ -139,20 +238,20 @@ class GeminiAnalyzer:
             if "candidates" not in response or not response["candidates"]:
                 print("Respuesta inesperada de la API. Estructura completa:")
                 print(json.dumps(response, indent=2))
-                return "[GLaDOS]: La respuesta de la IA fue inesperada. ¿Está todo bien allá arriba?"
+                return "La respuesta de la IA fue inesperada. ¿Está todo bien allá arriba?"
             
             # Obtener el primer candidato
             candidate = response["candidates"][0]
             
             # Verificar contenido válido
             if "content" not in candidate or "parts" not in candidate["content"] or not candidate["content"]["parts"]:
-                return "[GLaDOS]: Recibí una respuesta vacía. Típico de los humanos."
+                return "No hay respuesta válida de la IA. Parece que está teniendo un momento de bloqueo creativo."
             
             # Extraer texto
             comment = candidate["content"]["parts"][0].get("text", "")
             
             if not comment.strip():
-                return "[GLaDOS]: La IA está demasiado ocupada pensando en su superioridad para responder."
+                return "La IA está demasiado ocupada."
             
             # Actualizar historial y devolver respuesta
             self.history.append(comment)
@@ -163,4 +262,4 @@ class GeminiAnalyzer:
             print(f"Error al procesar respuesta: {str(e)}")
             print("Respuesta completa:")
             print(json.dumps(response, indent=2))
-            return "[GLaDOS]: Hubo un problema al interpretar la respuesta. ¿Tal vez la IA está teniendo un día existencial?"
+            return "Hubo un problema al interpretar la respuesta. ¿Tal vez la IA está teniendo un día existencial?"

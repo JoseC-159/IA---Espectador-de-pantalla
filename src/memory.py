@@ -1,32 +1,56 @@
 import json
+from pathlib import Path
 import os
 
-MEMORY_FILE = "memory.json"
+from numpy import character
+from config import DEFAULT_CHARACTER, MEMORY_DIR, get_character
+
 MAX_HISTORY = 10
 
-class GameMemory:
-    def __init__(self):
+
+class Memory:
+    def __init__(self, character_key=DEFAULT_CHARACTER):
+        self.character_key = character_key
+        self.memory_file = self._memory_path(character_key)
+        self.memory_file.parent.mkdir(parents=True, exist_ok=True)
+        self.context = self.load_memory()
+        self.current_state = ""
+        self.previous_state = ""
+        
+    def _memory_path(self, character_key):
+        """Genera una memoria exclusiva para cada personaje basada en su nombre"""
+        character = get_character(character_key)
+        language = character.get("language", "en")
+        return MEMORY_DIR / language / f"memo_{character_key.replace(' ','_')}.json"
+    
+    def set_character(self, character_key):
+        """Cambia el personaje activo y carga su memoria correspondiente"""
+        if character_key == self.character_key:
+            return
+        self.save_memory()
+        self.character_key = character_key
+        self.memory_file = self._memory_path(character_key)
         self.context = self.load_memory()
         self.current_state = ""
         self.previous_state = ""
         
     def load_memory(self):
         """Carga el historial de conversación"""
-        if os.path.exists(MEMORY_FILE):
-            with open(MEMORY_FILE, 'r') as f:
+        if self.memory_file.exists():
+            with self.memory_file.open("r", encoding="utf-8") as f:
                 return json.load(f)
         return {
-            "game": "Genshin Impact",
-            "player_status": "",
-            "current_mission": "",
-            "enemies_encountered": [],
-            "recent_events": []
+            "context": "",
+            "user_status": "",
+            "current_objective": "",
+            "recent_events": [],
+            "previous_comments": [],
         }
 
     def save_memory(self):
         """Guarda el historial de conversación"""
-        with open(MEMORY_FILE, 'w') as f:
-            json.dump(self.context, f)
+        with self.memory_file.open("w", encoding="utf-8") as f:
+            json.dump(self.context, f, ensure_ascii=False, indent=2)
 
     def update_memory(self, description):
         """Actualiza el historial de conversación"""
@@ -40,7 +64,7 @@ class GameMemory:
             self.save_memory()
             
     def has_significant_change(self):
-        """Determina si ha habido un cambio significativo en el estado del juego"""
+        """Determina si ha habido un cambio significativo en el estado actual"""
         if self.previous_state == "":
             return True
         return self.current_state != self.previous_state
