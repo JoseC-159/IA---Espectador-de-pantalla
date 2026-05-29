@@ -8,6 +8,10 @@ assets/overpositioned_icon/
 deprecated/
 scripts/
 
+# Memoria generada
+data/memory/en/memo_*.json
+data/memory/es/memo_*.json
+
 # Otros
 *.log
 *.tmp
